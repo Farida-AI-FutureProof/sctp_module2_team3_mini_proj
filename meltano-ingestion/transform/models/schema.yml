@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: customers_orders
+    description: "Customers joined with their orders"
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+      - name: order_id
+        tests:
+          - not_null
