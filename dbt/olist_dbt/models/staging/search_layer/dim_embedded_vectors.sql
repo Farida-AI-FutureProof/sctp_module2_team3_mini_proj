@@ -28,7 +28,7 @@ embedded_data AS (
                     knowledge_id,
                     page_content AS content,
                     
-                    -- ✅ 必须在此处选中所有你想在 metadata 中使用的字段
+                    -- ✅ You must select all fields here that you want to use in metadata
                     order_id,
                     customer_id,
                     customer_city,
@@ -57,11 +57,11 @@ SELECT
     ml_generate_embedding_result,
     ml_generate_embedding_status,
     
-    -- 方便 BigQuery 预览的独立列
+    -- Standalone columns for easier BigQuery preview
     product_category_name AS category,
     review_score,
     
-    -- ✅ FULL METADATA STRUCT (完全符合你的字段列表)
+    -- ✅ FULL METADATA STRUCT (fully matches your field list)
     STRUCT(
         order_id AS order_id,
         customer_id AS customer_id,

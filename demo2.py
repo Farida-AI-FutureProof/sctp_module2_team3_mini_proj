@@ -13,8 +13,21 @@ from wordcloud import WordCloud
 from sklearn.decomposition import PCA
 from sklearn.cluster import MiniBatchKMeans
 import json
+import os
+from dotenv import load_dotenv
 
 # ================= 1. Global Config & Styles =================
+# 1. Load the .env file into the environment
+# This looks for a .env file in the current directory
+load_dotenv()
+project_id = os.getenv("GCP_PROJECT_ID")
+dataset_id = os.getenv("DATASET_ID")
+location = os.getenv("LOCATION")
+
+project_id = os.getenv("GCP_PROJECT_ID")
+dataset_id = os.getenv("DATASET_ID")
+location = os.getenv("LOCATION")
+
 st.set_page_config(
     page_title="Olist AI Smart Assistant",
     page_icon="🛒",
@@ -33,9 +46,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- ⚠️ 项目配置 ---
-PROJECT_ID = "my-project-sctp-module-2" 
-DATASET_ID = "olist_dbt_dataset"
-LOCATION = "us-central1"
+PROJECT_ID = project_id
+DATASET_ID = dataset_id
+LOCATION = location
 
 SQL_TABLE = f"{PROJECT_ID}.{DATASET_ID}.init_search_unioned"
 VECTOR_TABLE = f"{PROJECT_ID}.{DATASET_ID}.dim_embedded_vectors"

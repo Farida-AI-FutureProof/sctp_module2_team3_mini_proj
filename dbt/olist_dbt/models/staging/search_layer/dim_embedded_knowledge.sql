@@ -10,7 +10,7 @@ SELECT
     -- --- 1. Primary Key ---
     review_id AS knowledge_id,
     
-    -- --- 2. Pass-through Columns (必须更新：透传所有新字段给向量表) ---
+    -- --- 2. Pass-through Columns (must be updated: pass through all new fields to the vector table) ---
     order_id,
     customer_id,
     customer_city,
@@ -28,7 +28,7 @@ SELECT
     seller_city,
     payment_type,
 
-    -- --- 3. Page Content Construction (必须更新：将新字段加入语义文本) ---
+    -- --- 3. Page Content Construction (must be updated: add new fields into semantic text) ---
     CONCAT(
         'Category: ', COALESCE(product_category_name, 'Unknown'), '. ',
         'Total Price: $', CAST(price AS STRING), '. ',

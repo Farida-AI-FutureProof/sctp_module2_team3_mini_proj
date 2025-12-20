@@ -2,13 +2,22 @@ import streamlit as st
 from google.cloud import bigquery
 import plotly.express as px
 import pandas as pd
+import os
+from dotenv import load_dotenv
 
 # ==============================================================================
 # 0. Project Configuration
 # ==============================================================================
-PROJECT_ID = "my-project-sctp-module-2"
-DATASET_ID = "olist_dbt_dataset"
-LOCATION = "us-central1"
+# 1. Load the .env file into the environment
+# This looks for a .env file in the current directory
+load_dotenv()
+project_id = os.getenv("GCP_PROJECT_ID")
+dataset_id = os.getenv("DATASET_ID")
+location = os.getenv("LOCATION")
+
+PROJECT_ID = project_id
+DATASET_ID = dataset_id
+LOCATION = location
 
 # ==============================================================================
 # 1. Page Configuration

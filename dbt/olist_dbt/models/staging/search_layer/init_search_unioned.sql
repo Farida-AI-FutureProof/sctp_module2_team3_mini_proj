@@ -22,23 +22,23 @@ payments_agg AS (
     GROUP BY order_id
 ),
 
--- 聚合 Items (解决一对多问题)
+-- Aggregate Items (resolve one-to-many issue)
 order_items_agg AS (
     SELECT 
         i.order_id,
         -- Metrics
         COUNT(i.order_item_id) as total_items_count,
         SUM(i.price) as total_order_value,
-        -- ✅ 新增: 聚合运费
+        -- ✅ New: aggregate freight cost
         SUM(i.freight_value) as total_freight_value,
         
-        -- ✅ 新增: 获取订单中物品的最大重量 (作为物流参考)
+        -- ✅ New: get the maximum item weight in the order (for logistics reference)
         MAX(p.product_weight_g) as product_weight_g,
         
-        -- ✅ 新增: 获取主商品的类别
+        -- ✅ New: get the primary product category
         ANY_VALUE(p.product_category_name) as main_product_category,
 
-        -- LLM 文本摘要
+        -- LLM text summary
         STRING_AGG(
             CONCAT(
                 COALESCE(p.product_category_name, 'Unknown'), 
@@ -73,9 +73,9 @@ SELECT
     -- Review Data
     r.review_score,
     r.review_comment_message,
-    -- (可选: 如果你需要 title 或 creation date 也可以加在这里)
+    -- (Optional: if you need title or creation date, you can add them here)
 
-    -- Order Data (使用修正后的列名)
+    -- Order Data (using corrected column names)
     o.order_status,
     o.order_purchase_timestamp,
     o.order_approved_at,
@@ -92,7 +92,7 @@ SELECT
     COALESCE(agg.total_order_value, 0) as price,
     COALESCE(agg.total_freight_value, 0) as freight_value,
     
-    pay.payment_type, -- 来自 payments_agg
+    pay.payment_type, -- from payments_agg
     
     agg.main_seller_city as seller_city,
     agg.item_summary_list

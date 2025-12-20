@@ -1,0 +1,29 @@
+name: proj_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10  # Stick to the version you are using
+  # Core Data Stack
+  - pandas
+  - numpy
+  - scipy
+  - matplotlib
+  # Cloud & DBT
+  - google-cloud-bigquery
+  - google-cloud-storage
+  - dbt-bigquery
+  # Dev Tools
+  - jupyterlab
+  # Pip dependencies (libs not on Conda or specific versions)
+  - pip:
+    - meltano
+    - streamlit
+    - plotly
+    - seaborn
+    - scikit-learn
+    - sqlalchemy
+    - great-expectations
+    - vertexai
+    - python-dotenv  # Common for managing secrets
+    - WordCloud
