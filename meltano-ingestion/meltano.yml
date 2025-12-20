@@ -49,11 +49,11 @@ plugins:
       variant: z3z1ma
       pip_url: git+https://github.com/z3z1ma/target-bigquery.git
       config:
-        project: # your project name
+        project: my-project-sctp-module-2
         dataset: olist_raw
         write_disposition: WRITE_TRUNCATE
         location: US
-        credentials_path: # your service account
+        credentials_path: /home/rox/rox_workplace/sctp/module_2/sctp_module2_team3_mini_proj/meltano-ingestion/my-project-sctp-module-2-da9a72050f09.json
         default_target_schema: olist_raw
         max_buffer_size: 2000
         max_retries: 5
