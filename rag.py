@@ -6,8 +6,28 @@ from vertexai.generative_models import GenerativeModel
 import time
 import pandas as pd
 from datetime import date
+import numpy as np
+import plotly.express as px
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from sklearn.decomposition import PCA
+from sklearn.cluster import MiniBatchKMeans
+import json
+import os
+from dotenv import load_dotenv
 
 # ================= 1. Global Config & Styles =================
+# 1. Load the .env file into the environment
+# This looks for a .env file in the current directory
+load_dotenv()
+project_id = os.getenv("GCP_PROJECT_ID")
+dataset_id = os.getenv("DATASET_ID")
+location = os.getenv("LOCATION")
+
+project_id = os.getenv("GCP_PROJECT_ID")
+dataset_id = os.getenv("DATASET_ID")
+location = os.getenv("LOCATION")
+
 st.set_page_config(
     page_title="Olist AI Smart Assistant",
     page_icon="🛒",
@@ -15,24 +35,26 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for visual optimization
 st.markdown("""
 <style>
     .block-container {padding-top: 2rem; padding-bottom: 2rem;}
     .stChatMessage {border-radius: 10px; border: 1px solid #e0e0e0;}
     .stCode {font-family: 'Fira Code', monospace;}
+    /* 修复 Streamlit 原生加载时的闪烁感 */
+    .stAppViewBlockContainer {transition: opacity 0.3s ease-in-out;}
 </style>
 """, unsafe_allow_html=True)
 
-PROJECT_ID = "my-project-sctp-module-2" 
-DATASET_ID = "olist_dbt_dataset"
-LOCATION = "us-central1"
+# --- ⚠️ 项目配置 ---
+PROJECT_ID = project_id
+DATASET_ID = dataset_id
+LOCATION = location
 
 SQL_TABLE = f"{PROJECT_ID}.{DATASET_ID}.init_search_unioned"
 VECTOR_TABLE = f"{PROJECT_ID}.{DATASET_ID}.dim_embedded_vectors"
 EMBEDDING_MODEL_NAME = "text-embedding-005"
 
-# 💲 Pricing Configuration (USD per 1M Tokens)
+# 💲 Pricing Configuration
 PRICING_RATES = {
     "gemini-2.0-flash-001": {"input": 0.10, "output": 0.40}, 
     "gemini-1.5-flash-001": {"input": 0.075, "output": 0.30},
@@ -44,12 +66,10 @@ def safe_error(e):
 
 def calculate_cost(model_name, input_tok, output_tok):
     rates = PRICING_RATES.get(model_name, PRICING_RATES["default"])
-    cost_input = (input_tok / 1_000_000) * rates["input"]
-    cost_output = (output_tok / 1_000_000) * rates["output"]
-    return cost_input + cost_output
+    return ((input_tok / 1e6) * rates["input"]) + ((output_tok / 1e6) * rates["output"])
 
 # ================= 2. Resource Initialization =================
-@st.cache_resource
+@st.cache_resource(show_spinner="Initializing AI Core...")
 def init_resources():
     try:
         bq_client = bigquery.Client(project=PROJECT_ID)
@@ -63,7 +83,7 @@ def init_resources():
         except:
             model_name = "gemini-1.5-flash-001"
             gen_model = GenerativeModel(model_name)
-            status_msg = "🟡 Online (Gemini 1.5 Flash - Degraded Mode)"
+            status_msg = "🟡 Online (Gemini 1.5 Flash)"
             
         return bq_client, embed_model, gen_model, status_msg, model_name
     except Exception as e:
@@ -118,37 +138,28 @@ def get_query_vector(text):
     return None
 
 def search_vectors_hybrid(query_vector, user_text, filters, top_k=20):
-    where_clauses = []
     query_params = [
         bigquery.ArrayQueryParameter("query_vector", "FLOAT64", query_vector),
-        bigquery.ScalarQueryParameter("top_k", "INT64", top_k),
         bigquery.ScalarQueryParameter("keyword", "STRING", f"%{user_text}%")
     ]
-
+    
+    where_clauses = []
     if filters.get('min_score'):
-        where_clauses.append("metadata.review_score >= @min_score")
-        query_params.append(bigquery.ScalarQueryParameter("min_score", "INT64", filters['min_score']))
-    if filters.get('start_date'):
-        where_clauses.append("CAST(metadata.order_purchase_timestamp AS DATE) >= @start_date")
-        query_params.append(bigquery.ScalarQueryParameter("start_date", "DATE", filters['start_date']))
-    if filters.get('end_date'):
-        where_clauses.append("CAST(metadata.order_purchase_timestamp AS DATE) <= @end_date")
-        query_params.append(bigquery.ScalarQueryParameter("end_date", "DATE", filters['end_date']))
-
+        where_clauses.append(f"metadata.review_score >= {filters['min_score']}")
+        
     where_stmt = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
     sql = f"""
         SELECT
-            knowledge_id, page_content, metadata.order_id, metadata.customer_city,
-            metadata.review_score, metadata.product_category_name, metadata.price,
-            ML.DISTANCE(@query_vector, ml_generate_embedding_result, 'COSINE') AS vec_dist,
+            knowledge_id, page_content, metadata.review_score, metadata.product_category_name, metadata.price,
+            metadata.customer_city,
             (ML.DISTANCE(@query_vector, ml_generate_embedding_result, 'COSINE') - 
              (CASE WHEN LOWER(page_content) LIKE LOWER(@keyword) THEN 0.3 ELSE 0.0 END)) 
             AS hybrid_score
         FROM `{VECTOR_TABLE}`
         {where_stmt}
         ORDER BY hybrid_score ASC
-        LIMIT @top_k
+        LIMIT {top_k}
     """
     job_config = bigquery.QueryJobConfig(query_parameters=query_params)
     return client.query(sql, job_config=job_config).to_dataframe()
@@ -156,12 +167,15 @@ def search_vectors_hybrid(query_vector, user_text, filters, top_k=20):
 def ask_gemini_stream(user_query, context_text, chat_history):
     history_block = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in chat_history[-3:]])
     prompt = f"""
-    SYSTEM: You are a Senior Data Analyst for Olist.
+    SYSTEM: You are a Senior Data Analyst for Olist. The context data is in Portuguese.
+    INSTRUCTION: 
+    1. Answer the user's question based strictly on Context.
+    2. ALWAYS translate the insights and evidence into ENGLISH.
+    3. If quoting a Portuguese review, provide the English translation in parentheses.
+    
     CONTEXT: {context_text}
     HISTORY: {history_block}
     QUESTION: {user_query}
-    
-    INSTRUCTIONS: Answer based strictly on Context. Render lists as Markdown tables.
     """
     return generative_model.generate_content(prompt, stream=True)
 
@@ -172,198 +186,290 @@ def decide_route(user_query):
     except:
         return "SEARCH"
 
-# ================= 5. UI Main Interface =================
+# ================= 5. ⚡ Optimized Semantic Galaxy Logic =================
 
-# --- Initialize Session State ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "total_cost" not in st.session_state:
-    st.session_state.total_cost = 0.0
-if "total_tokens" not in st.session_state:
-    st.session_state.total_tokens = 0
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_data_and_pca(user_query=None, limit_global=3000, limit_focused=800):
+    """Level 1 Cache: I/O & PCA"""
+    if not user_query:
+        query = f"""
+        SELECT 
+            metadata.review_score as review_score,
+            metadata.product_category_name as category,
+            metadata.review_comment_message as comment,
+            metadata.customer_city as city,
+            metadata.price as price,
+            ml_generate_embedding_result
+        FROM `{VECTOR_TABLE}`
+        WHERE ml_generate_embedding_result IS NOT NULL
+        AND metadata.review_comment_message IS NOT NULL
+        LIMIT {limit_global}
+        """
+        query_params = []
+    else:
+        q_vec = get_query_vector(user_query)
+        if q_vec is None: return pd.DataFrame()
+        query = f"""
+        SELECT 
+            metadata.review_score as review_score,
+            metadata.product_category_name as category,
+            metadata.review_comment_message as comment,
+            metadata.customer_city as city,
+            metadata.price as price,
+            ml_generate_embedding_result
+        FROM `{VECTOR_TABLE}`
+        WHERE ml_generate_embedding_result IS NOT NULL
+        AND metadata.review_comment_message IS NOT NULL
+        ORDER BY ML.DISTANCE(@q_vec, ml_generate_embedding_result, 'COSINE') ASC
+        LIMIT {limit_focused}
+        """
+        query_params = [bigquery.ArrayQueryParameter("q_vec", "FLOAT64", q_vec)]
+    
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    df = client.query(query, job_config=job_config).to_dataframe()
+    
+    if not df.empty:
+        matrix = np.stack(df['ml_generate_embedding_result'].values)
+        pca = PCA(n_components=3)
+        components = pca.fit_transform(matrix)
+        df['x'] = components[:, 0]
+        df['y'] = components[:, 1]
+        df['z'] = components[:, 2]
+        df = df.drop(columns=['ml_generate_embedding_result'])
+        df['category'] = df['category'].fillna('Unknown')
+    return df
 
-# --- Sidebar ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_labeled_clusters(df_coords, n_clusters):
+    """Level 2 Cache: Clustering & Labeling"""
+    if df_coords.empty: return df_coords
+    df = df_coords.copy()
+    
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, batch_size=256, n_init=3)
+    features = df[['x', 'y', 'z']].values
+    df['cluster_id'] = kmeans.fit_predict(features)
+    
+    samples = {}
+    for cid in range(n_clusters):
+        sample_reviews = df[df['cluster_id'] == cid]['comment'].sample(min(3, len(df))).tolist()
+        samples[cid] = sample_reviews
+    
+    label_prompt = f"""
+    Generate a short topic title (2-4 words) in ENGLISH for EACH cluster ID based on the samples.
+    Data: {json.dumps(samples, ensure_ascii=False)}
+    Output strictly valid JSON format: {{ "0": "Topic Name", "1": "Topic Name" }}
+    """
+    try:
+        resp = generative_model.generate_content(label_prompt)
+        text_resp = resp.text.replace("```json", "").replace("```", "").strip()
+        labels_map = json.loads(text_resp)
+        int_map = {int(k): v for k, v in labels_map.items()}
+        df['cluster_label'] = df['cluster_id'].map(int_map).fillna(df['cluster_id'].astype(str))
+    except Exception:
+        df['cluster_label'] = "Cluster " + df['cluster_id'].astype(str)
+    return df
+
+def plot_wordcloud(text):
+    if not text or len(text) < 5: return None
+    wc = WordCloud(background_color="white", colormap="Reds", width=800, height=400, max_words=80).generate(text)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.imshow(wc, interpolation='bilinear'); ax.axis("off")
+    return fig
+
+# ================= 6. UI Main Interface =================
+
+if "messages" not in st.session_state: st.session_state.messages = []
+if "total_cost" not in st.session_state: st.session_state.total_cost = 0.0
+if "total_tokens" not in st.session_state: st.session_state.total_tokens = 0
+
+# --- Sidebar (Using Placeholders to avoid Rerun) ---
 with st.sidebar:
     st.header("⚙️ Control Panel")
+    with st.expander("🔎 Chat Filters", expanded=True):
+        score_range = st.slider("Min Review Score", 1, 5, 1)
     
-    with st.expander("🔎 Data Filters", expanded=True):
-        score_range = st.slider("Score Range (Review Score)", 1, 5, (1, 5))
-        start_date = st.date_input("Start Date", value=date(2017, 1, 1))
-        end_date = st.date_input("End Date", value=date(2018, 8, 31))
-    
-    st.divider()
-    
-    st.subheader("📊 Session Statistics")
-    col_metric1, col_metric2 = st.columns(2)
-    col_metric1.metric("Total Tokens", f"{st.session_state.total_tokens:,}")
-    col_metric2.metric("Total Cost", f"${st.session_state.total_cost:.4f}")
-    
-    if st.button("🗑️ Clear Conversation", use_container_width=True, type="primary"):
+    if st.button("🗑️ Reset Session", use_container_width=True):
         st.session_state.messages = []
         st.session_state.total_cost = 0.0
         st.session_state.total_tokens = 0
         st.rerun()
+        
+    st.divider()
+    token_placeholder = st.empty()
+    cost_placeholder = st.empty()
+    
+    token_placeholder.metric("Tokens", f"{st.session_state.total_tokens:,}")
+    cost_placeholder.metric("Cost", f"${st.session_state.total_cost:.4f}")
 
-# --- Header & Status ---
+# --- Header ---
 st.title("🛒 Olist Smart Data Assistant")
-
-# Use column layout to optimize header info
 col_h1, col_h2, col_h3 = st.columns([2, 1, 1])
-with col_h1:
-    st.markdown(f"**Model:** `{current_model_name}`")
-with col_h2:
-    st.markdown(f"**Status:** {model_status}")
-with col_h3:
-    st.markdown(f"**Region:** `{LOCATION}`")
-
+with col_h1: st.markdown(f"**Model:** `{current_model_name}`")
+with col_h2: st.markdown(f"**Status:** {model_status}")
+with col_h3: st.markdown(f"**Region:** `{LOCATION}`")
 st.divider()
 
-# --- Render Chat History ---
-for msg in st.session_state.messages:
-    avatar = "🧑‍💻" if msg["role"] == "user" else "🤖"
-    with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
-        
-        # Render additional info (SQL, Data, Cost)
-        if "sql_code" in msg:
-            with st.expander("🛠️ View Generated SQL"):
-                st.code(msg["sql_code"], language="sql")
-        if "data_table" in msg:
-            with st.expander("📊 View Source Data"):
-                st.dataframe(msg["data_table"], use_container_width=True)
-        if "source_preview" in msg:
-            with st.expander(f"📚 Reference Documents ({len(msg['source_preview'])} items)"):
-                st.dataframe(msg["source_preview"], use_container_width=True)
-        if "usage_stats" in msg:
-            stats = msg["usage_stats"]
-            st.caption(f"⚡ Turn Cost: ${stats['cost']:.5f} ({stats['input']} in / {stats['output']} out)")
+# ================= 7. Main Tabs =================
+tab1, tab2 = st.tabs(["💬 RAG Chat Assistant", "🌌 Dynamic Semantic Galaxy"])
 
-# --- Chat Input Processing ---
-if prompt := st.chat_input("Enter your question (e.g., What was the average freight value in Rio de Janeiro in 2017?)"):
-    
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar="🧑‍💻"):
-        st.markdown(prompt)
+# --- TAB 1: Chat Interface ---
+with tab1:
+    # 🔴 FIX START: 修复历史记录渲染
+    # Render History
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+            # 1. 显示 SQL 代码 (如果存在)
+            if "sql_query" in m:
+                with st.expander("🛠️ Generated SQL", expanded=False):
+                    st.code(m["sql_query"], language="sql")
+            # 2. 显示 Data Table (SQL 结果)
+            if "data_table" in m: 
+                with st.expander("📊 Data Result", expanded=False):
+                    st.dataframe(m["data_table"])
+            # 3. 显示 Source Preview (向量搜索结果)
+            if "source_preview" in m: 
+                with st.expander("📚 Source Documents", expanded=False):
+                    st.dataframe(m["source_preview"])
+    # 🔴 FIX END
 
-    with st.chat_message("assistant", avatar="🤖"):
-        container = st.empty()
-        current_usage = {"input": 0, "output": 0}
+    # Chat Input
+    if prompt := st.chat_input("Ask a question (e.g., Why do people complain about delivery?)"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
         
-        try:
-            # Use st.status for better interactive experience
-            with st.status("Thinking...", expanded=True) as status:
+        with st.chat_message("assistant"):
+            cont = st.empty()
+            
+            with st.status("🧠 Thinking...", expanded=True) as status:
                 
-                # 1. Route Decision
-                status.write("🤔 Analyzing user intent...")
+                status.write("🤔 Analyzing intent...")
                 route = decide_route(prompt)
-                status.write(f"⚙️ Mode Match: **{route}**")
                 
-                # === Path A: SQL Stats Mode ===
+                current_usage = {"input": 0, "output": 0}
+                
                 if "STATS" in route:
-                    status.write("📝 Generating SQL query...")
-                    sql_query, result_df, sql_usage = generate_and_run_sql(prompt)
+                    status.write("📊 Generating SQL...")
+                    sql, df, usage = generate_and_run_sql(prompt)
                     
-                    # Accumulate Tokens
-                    current_usage["input"] += sql_usage["input"]
-                    current_usage["output"] += sql_usage["output"]
-                    
-                    if result_df is not None:
-                        status.write("🔍 BigQuery search complete, organizing answer...")
-                        data_str = result_df.head(100).to_csv(index=False)
+                    if df is not None:
+                        # 🔴 FIX: 立即显示生成的 SQL
+                        status.markdown("**Executed SQL:**")
+                        status.code(sql, language='sql')
                         
-                        ans_prompt = f"""
-                        User Question: '{prompt}'
-                        Data (CSV): {data_str}
-                        INSTRUCTION: Answer completely based on data. Render tables if needed.
-                        """
-                        resp = generative_model.generate_content(ans_prompt)
+                        status.write("📝 Formatting answer...")
+                        ans = generative_model.generate_content(f"Q:{prompt}\nData:{df.head().to_csv()}\nINSTRUCTION: Answer in ENGLISH.").text
                         
-                        if resp.usage_metadata:
-                            current_usage["input"] += resp.usage_metadata.prompt_token_count
-                            current_usage["output"] += resp.usage_metadata.candidates_token_count
+                        current_usage["input"] += usage["input"]
+                        current_usage["output"] += usage["output"]
                         
-                        full_response = resp.text
-                        status.update(label="✅ Done!", state="complete", expanded=False)
+                        cont.markdown(ans)
                         
-                        # Display Results
-                        container.markdown(full_response)
-                        
-                        # Calculate Cost
-                        turn_cost = calculate_cost(current_model_name, current_usage["input"], current_usage["output"])
-                        stats_dict = {"input": current_usage["input"], "output": current_usage["output"], "cost": turn_cost}
-                        
-                        # Update Session Stats
-                        st.session_state.total_cost += turn_cost
-                        st.session_state.total_tokens += (current_usage["input"] + current_usage["output"])
-                        
-                        # Save Message
+                        # 🔴 FIX: 立即显示 DataFrame
+                        with st.expander("📊 Data Result", expanded=True):
+                            st.dataframe(df)
+
+                        # 🔴 FIX: 将 SQL 和 DataFrame 都保存到历史记录
                         st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": full_response,
-                            "sql_code": sql_query,
-                            "data_table": result_df,
-                            "usage_stats": stats_dict
+                            "role": "assistant", 
+                            "content": ans, 
+                            "sql_query": sql,  # Save SQL
+                            "data_table": df   # Save DF
                         })
-                        st.rerun() # Force rerun to update sidebar stats
-                        
+                        status.update(label="✅ SQL Stats Complete", state="complete", expanded=False)
                     else:
-                        status.update(label="❌ SQL Execution Failed", state="error")
-                        container.error(f"Unable to execute query: {sql_query}")
-
-                # === Path B: Vector Search Mode ===
-                else:
-                    status.write("🔎 Performing hybrid vector search...")
-                    q_vector = get_query_vector(prompt)
-                    filters = {"min_score": score_range[0], "start_date": start_date, "end_date": end_date}
+                        status.update(label="❌ SQL Error", state="error")
+                        cont.error("SQL Execution Failed")
+                        
+                else: # SEARCH Mode
+                    status.write("🔎 Vector Search...")
+                    q_vec = get_query_vector(prompt)
+                    df = search_vectors_hybrid(q_vec, prompt, {"min_score": score_range})
                     
-                    if q_vector:
-                        df = search_vectors_hybrid(q_vector, prompt, filters, 20)
-                    else:
-                        df = None
+                    if df is not None:
+                        status.write("🤖 Generating insights...")
+                        
+                        # 🔴 FIX: 立即显示引用来源 (Source Preview)
+                        status.markdown("**Found References:**")
+                        status.dataframe(df[['review_score', 'product_category_name', 'page_content']].head(3))
 
-                    if df is not None and not df.empty:
-                        status.write("📚 Relevant documents found, generating answer...")
-                        context_lines = [f"{row['page_content']}" for _, row in df.iterrows()]
-                        full_context = "\n".join(context_lines)
+                        ctx = "\n".join(df['page_content'].tolist())
+                        resp = ""
                         
-                        status.update(label="🤖 Generating...", state="running", expanded=False)
+                        for chunk in ask_gemini_stream(prompt, ctx, st.session_state.messages):
+                            if chunk.text: resp += chunk.text; cont.markdown(resp + "▌")
                         
-                        stream = ask_gemini_stream(prompt, full_context, st.session_state.messages)
-                        full_response = ""
+                        cont.markdown(resp) 
                         
-                        for chunk in stream:
-                            if chunk.usage_metadata:
-                                current_usage["input"] = chunk.usage_metadata.prompt_token_count
-                                current_usage["output"] = chunk.usage_metadata.candidates_token_count
-                            if chunk.text:
-                                full_response += chunk.text
-                                container.markdown(full_response + "▌")
-                        
-                        container.markdown(full_response)
-                        
-                        # Calculate Cost
-                        turn_cost = calculate_cost(current_model_name, current_usage["input"], current_usage["output"])
-                        stats_dict = {"input": current_usage["input"], "output": current_usage["output"], "cost": turn_cost}
+                        # 🔴 FIX: 立即显示完整 Source Preview (放在回答下方)
+                        with st.expander("📚 Source Documents", expanded=False):
+                            st.dataframe(df.head())
 
-                        # Update Session Stats
-                        st.session_state.total_cost += turn_cost
-                        st.session_state.total_tokens += (current_usage["input"] + current_usage["output"])
-                        
-                        # Prepare Preview Data
-                        preview_cols = ['product_category_name', 'price', 'customer_city', 'review_score']
-                        valid_cols = [c for c in preview_cols if c in df.columns]
-                        
+                        # 🔴 FIX: 保存 Source Preview 到历史记录
                         st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": full_response,
-                            "source_preview": df[valid_cols].head(5),
-                            "usage_stats": stats_dict
+                            "role": "assistant", 
+                            "content": resp, 
+                            "source_preview": df.head() # Save Source
                         })
-                        st.rerun()
-
+                        status.update(label="✅ Analysis Complete", state="complete", expanded=False)
                     else:
-                        status.update(label="⚠️ No Data Found", state="error")
-                        container.warning("No relevant data found, please try adjusting the filters.")
+                        status.update(label="⚠️ No Data", state="error")
+                        cont.warning("No data found.")
 
-        except Exception as e:
-            st.error(f"System Error: {safe_error(e)}")
+            turn_cost = calculate_cost(current_model_name, current_usage["input"], current_usage["output"])
+            st.session_state.total_cost += turn_cost
+            st.session_state.total_tokens += (current_usage["input"] + current_usage["output"])
+            
+            token_placeholder.metric("Tokens", f"{st.session_state.total_tokens:,}")
+            cost_placeholder.metric("Cost", f"${st.session_state.total_cost:.4f}")
+
+# --- TAB 2: Dynamic Semantic Galaxy ---
+with tab2:
+    st.header("🌌 Semantic Galaxy & VoC Analytics")
+    st.caption("AI-powered visualization. Filter the map by typing a context below.")
+    
+    col_input, col_ctrl = st.columns([2, 1])
+    with col_input:
+        map_query = st.text_input("🔍 Filter Map by Context", placeholder="Leave empty for Global View...")
+    with col_ctrl:
+        n_clusters = st.slider("Topics", 2, 8, 5)
+        view_mode = st.radio("View", ["2D", "3D"], horizontal=True)
+        color_by = st.selectbox("Color", ["cluster_label", "review_score", "category"])
+
+    title_suffix = f"for '{map_query}'" if map_query else "(Global View)"
+    
+    with st.spinner("Mapping semantic space..."):
+        raw_df_coords = fetch_data_and_pca(user_query=map_query, limit_global=3000, limit_focused=800)
+
+    if not raw_df_coords.empty:
+        with st.spinner("AI is organizing topics..."):
+            final_df = get_labeled_clusters(raw_df_coords, n_clusters)
+
+        if view_mode == "3D":
+            fig = px.scatter_3d(final_df, x='x', y='y', z='z', color=color_by,
+                                hover_data=['comment', 'city', 'price'], height=600,
+                                color_continuous_scale="RdYlGn" if color_by == "review_score" else None,
+                                title=f"3D Semantic Space {title_suffix}")
+        else:
+            fig = px.scatter(final_df, x='x', y='y', color=color_by,
+                             hover_data=['comment', 'city', 'price'], height=500,
+                             color_continuous_scale="RdYlGn" if color_by == "review_score" else None,
+                             title=f"2D Semantic Map {title_suffix}")
+            fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            clusters = sorted(final_df['cluster_label'].unique())
+            sel_cluster = st.selectbox("Drill-down Topic", clusters)
+            sub_df = final_df[final_df['cluster_label'] == sel_cluster]
+            st.dataframe(sub_df[['review_score', 'comment']].head(5), use_container_width=True)
+        with c2:
+            st.caption(f"Word Cloud: {sel_cluster}")
+            text = " ".join(sub_df['comment'].dropna().astype(str).tolist())
+            fig_wc = plot_wordcloud(text)
+            if fig_wc: st.pyplot(fig_wc)
+    else:
+        st.warning("No data found.")
