@@ -1,20 +1,8 @@
 # BACKUP — Farida’s Analysis + Recommendations (NTU SCTP Module 2)
 
-This file is a **single source of truth** for:
-- Final business analysis (insights)
-- Recommendations
-- Speaker notes (plain English)
-- What we built (technical narrative)
-- Challenges + resolutions
-
-Use this as:
-- A fallback if slides get duplicated or formatting breaks
-- A reference during team alignment
-- A source for copy/paste into Google Slides
-
 ---
 
-## 1. Executive Summary (for instructors)
+## 1. Executive Summary 
 
 We built an end-to-end ELT + analytics workflow using Olist e-commerce data:
 - Ingested raw CSV data into BigQuery (raw layer)
@@ -26,7 +14,7 @@ Outcome: an analytics-ready star schema plus actionable insights on growth, cate
 
 ---
 
-## 2. Project Flow (Plain English)
+## 2. Project Flow 
 
 1) We started with raw marketplace data (orders, items, products, customers, payments, etc.)  
 2) Loaded it into a warehouse (BigQuery) so all analysis uses a consistent data source  
@@ -70,8 +58,6 @@ It ensures revenue and order metrics aggregate correctly without double counting
 - Monitor MoM trend per category to detect early decline or emerging categories.
 - Pair revenue trend with operational KPIs (delivery delays, review scores) to avoid growth-at-any-cost.
 
-**Speaker Notes**
-“This gives leadership a pulse on growth and seasonality. Even without causal claims, we can see patterns useful for planning.”
 
 ---
 
@@ -85,8 +71,7 @@ It ensures revenue and order metrics aggregate correctly without double counting
 - Build a diversification strategy: nurture mid-tier categories with consistent demand.
 - Create a quarterly ‘category watchlist’ to track rising categories and reduce dependency risk.
 
-**Speaker Notes**
-“This is the classic Pareto effect in marketplaces. Great for profit, risky for resilience.”
+
 
 ---
 
@@ -99,8 +84,7 @@ It ensures revenue and order metrics aggregate correctly without double counting
 - Coordinate marketing calendar with operations capacity.
 - Post-peak review: track whether review scores or delivery delays degrade after peaks.
 
-**Speaker Notes**
-“Growth is only good if customer experience does not collapse during peaks.”
+
 
 ---
 
@@ -135,9 +119,5 @@ It ensures revenue and order metrics aggregate correctly without double counting
 
 ---
 
-## 7. Next Steps (If more time)
-- Add delivery performance analysis (delivery delay vs review score)
-- Add cohort analysis (repeat buyers over time)
-- Add customer segmentation by category purchase behavior
-- Automate slide generation fully using a stable Apps Script approach
+
 
