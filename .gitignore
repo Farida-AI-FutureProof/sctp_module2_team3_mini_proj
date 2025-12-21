@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 *.json
+.meltano/logs/elt/devtap-csv-to-target-bigquery/*/elt.log
