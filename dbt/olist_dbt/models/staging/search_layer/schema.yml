@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: init_search_unioned
+    description: "将订单、产品、评论和客户数据连接在一起的宽表"
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+
+  - name: dim_embedded_knowledge
+    description: "RAG 系统的核心知识表，包含清洗后的文本和元数据"
+    columns:
+      - name: knowledge_id
+        tests:
+          - unique
+          - not_null
+      - name: page_content
+        tests:
+          - not_null
+
+  - name: dim_embedded_vectors
+    description: "最终搜索表，包含 Vertex AI 生成的向量"
+    columns:
+      - name: knowledge_id
+        tests:
+          - unique
+          - not_null
+      - name: text_embedding
+        description: "Vertex AI 生成的 Embeddings 向量数组"
+        tests:
+          - not_null

@@ -7,7 +7,7 @@ olist_dbt:
       location: US
       method: oauth
       priority: interactive
-      project: # your account ID
+      project: ${GCP_PROJECT_ID}
       threads: 1
       type: bigquery
   target: dev
